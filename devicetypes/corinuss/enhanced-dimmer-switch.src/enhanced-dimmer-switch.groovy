@@ -256,10 +256,10 @@ def updateSettings() {
 	log.debug("Updating Switch Settings")
 	
     //lets make sure we are in the the right ranges
-    def stepSize = 99 // Math.max(Math.min(stepSize, 99), 1)
-    def stepDuration = 2 // Math.max(Math.min(stepDuration, 255), 1)
-    def manualStepSize = 99 // Math.max(Math.min(manualStepSize, 99), 1)
-    def manualStepDuration = 2 // Math.max(Math.min(manualStepDuration, 255), 1)
+    def stepSize = Math.max(Math.min(stepSize, 99), 1)
+    def stepDuration = Math.max(Math.min(stepDuration, 255), 1)
+    def manualStepSize = Math.max(Math.min(manualStepSize, 99), 1)
+    def manualStepDuration = Math.max(Math.min(manualStepDuration, 255), 1)
    
      def cmds = []
         cmds << zwave.configurationV1.configurationSet(configurationValue: [stepSize], parameterNumber: 7, size: 1).format()
