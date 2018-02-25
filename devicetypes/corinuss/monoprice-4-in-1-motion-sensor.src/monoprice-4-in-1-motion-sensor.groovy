@@ -40,18 +40,31 @@ metadata {
 	tiles(scale: 2) {
 		multiAttributeTile(name:"motion", type: "generic", width: 6, height: 4){
 			tileAttribute("device.motion", key: "PRIMARY_CONTROL") {
-				attributeState("active", label:'motion', icon:"st.motion.motion.active", backgroundColor:"#00A0DC")
-				attributeState("inactive", label:'no motion', icon:"st.motion.motion.inactive", backgroundColor:"#CCCCCC")
+				attributeState("active", label:'motion', icon:"st.motion.motion.active", backgroundColor:"#00a0dc")
+				attributeState("inactive", label:'no motion', icon:"st.motion.motion.inactive", backgroundColor:"#ffffff")
 			}
 		}
 		valueTile("temperature", "device.temperature", decoration: "flat", width: 2, height: 2) {
-			state("temperature", label:'${currentValue}°F', unit:"", icon: "st.Weather.weather2")
+			state("temperature", label:'${currentValue}°F', unit:"", icon: "st.Weather.weather2", backgroundColors:[
+                [value: 31, color: "#153591"],
+                [value: 44, color: "#1e9cbb"],
+                [value: 59, color: "#90d2a7"],
+                [value: 74, color: "#44b621"],
+                [value: 84, color: "#f1d801"],
+                [value: 95, color: "#d04e00"],
+                [value: 96, color: "#bc2323"]
+            ])
 		}
 		valueTile("humidity", "device.humidity", decoration: "flat", width: 2, height: 2) {
 			state("humidity", label:'${currentValue}%', unit:"", icon: "st.Weather.weather12")
 		}
 		valueTile("illuminance", "device.illuminance", decoration: "flat", width: 2, height: 2) {
-			state("illuminance", label:'${currentValue}%', unit:"", icon: "st.illuminance.illuminance.light")
+			state("illuminance", label:'${currentValue}%', unit:"", icon: "st.illuminance.illuminance.light"
+ //           backgroundColors:[
+ //           [value: 0, color: "#ffffff"],
+ //           [value: 100, color: "#ffff00"],
+ //           ]
+            )
 		}
 		valueTile("battery", "device.battery", decoration: "flat", width: 2, height: 2) {
 			state("battery", label:'${currentValue}% battery', unit:"")
@@ -60,18 +73,19 @@ metadata {
 			state("configure", label:'', action:"configure", icon:"st.secondary.configure")
 		}
 
-		main(["motion", "temperature", "humidity", "illuminance"])
+		//main("motion")
+		main("humidity")
 		details(["motion", "temperature", "humidity", "illuminance", "battery", "configure"])
 	}
 
     preferences {
-        //input "tempUpdateInterval", "decimal", title: "Temperature Delta (0.1-5°F)", description: "Delta required before Temperature is updated.", range: "0.1..5"
-		input "tempUpdateInterval", "number", title: "Temperature Delta in 0.1°F increments (1-50)", description: "Delta required before Temperature is updated.", range: "1..50"
+        input "tempUpdateInterval", "decimal", title: "Temperature Delta (0.1-5°F)", description: "Delta required before Temperature is updated.", range: "0.1..5"
         input "humidityUpdateInterval", "number", title: "Humidity Delta (1-50%)", description: "Delta required before Humidity is updated.", range: "1..50"
         input "luxUpdateInterval", "number", title: "Illuminance Delta (1-50%)", description: "Delta required before Illuminance is updated.", range: "1..50"
         input "motionRetrigger", "number", title: "Motion Retrigger Time (1-255 minutes)", description: "How many minutes between motion sensor triggers?", range: "1..255"
         input "motionSensitivity", "number", title: "Motion Sensitivity (1-7)", description: "How sensitive is the motion sensor?", range: "1..7"
         input "ledMode", "enum", title: "LED Mode", description: "LED behavior when motion is detected", options: ["Off", "Flash once", "Breathe"]
+        input "wakeUpPeriod", "number", title: "Wake Up Period (minutes)", description: "Minutes between forced wake-ups (10 minute intervals)"
 	}
 }
 
@@ -93,28 +107,33 @@ private getCommandClassVersions() {
         0x80: 1,	// Battery
         0x84: 2,	// Wake Up
         0x71: 3,	// Notification (up to V4)
-        0x70: 1 	// Configuration
+        0x70: 1, 	// Configuration
+        0x98: 1		// Security
 	]
 }
 
 def parse(String description) {
+	if (!state.configured) {
+	    log.debug "Configuration is pending"
+    }
+    
 	def result = null
 	if (description.startsWith("Err")) {
 	    result = createEvent(descriptionText:description)
 	} else {
 		def cmd = zwave.parse(description, commandClassVersions)
         if (cmd) {
-            log.debug "Parsed ${cmd} to ${result.inspect()}"
         	result = zwaveEvent(cmd)
+            log.debug "Parsed ${cmd} to ${result.inspect()}"
         } else {
             log.debug "Non-parsed event: ${description}"
-        	//result = createEvent(value: description, descriptionText: description, isStateChange: false)
+        	result = createEvent(value: description, descriptionText: description, isStateChange: false)
         }
     }
 	return result
 }
 
-def sensorValueEvent(value) {
+def sensorValueEvent(value, source) {
 	if (value) {
 		createEvent(name: "motion", value: "active", descriptionText: "$device.displayName detected motion")
 	} else {
@@ -124,77 +143,136 @@ def sensorValueEvent(value) {
 
 def zwaveEvent(physicalgraph.zwave.commands.basicv1.BasicReport cmd)
 {
-	sensorValueEvent(cmd.value)
+	sensorValueEvent(cmd.value, "BasicReport")
 }
 
 def zwaveEvent(physicalgraph.zwave.commands.basicv1.BasicSet cmd)
 {
-	sensorValueEvent(cmd.value)
+	sensorValueEvent(cmd.value, "BasicSet")
 }
 
 //def zwaveEvent(physicalgraph.zwave.commands.switchbinaryv1.SwitchBinaryReport cmd)
 //{
-//	sensorValueEvent(cmd.value)
+//	sensorValueEvent(cmd.value, "SwitchBinaryReport")
 //}
 
 def zwaveEvent(physicalgraph.zwave.commands.sensorbinaryv1.SensorBinaryReport cmd)
 {
-	sensorValueEvent(cmd.sensorValue)
+	sensorValueEvent(cmd.sensorValue, "SensorBinaryReport")
 }
 
 //def zwaveEvent(physicalgraph.zwave.commands.sensoralarmv1.SensorAlarmReport cmd)
 //{
-//	sensorValueEvent(cmd.sensorState)
+//	sensorValueEvent(cmd.sensorState, "SensorAlarmReport")
 //}
 
 def zwaveEvent(physicalgraph.zwave.commands.notificationv3.NotificationReport cmd)
 {
 	def result = []
-	if (cmd.notificationType == 0x07) {
-		if (cmd.v1AlarmType == 0x07) {  // special case for nonstandard messages from Monoprice ensors
-			result << sensorValueEvent(cmd.v1AlarmLevel)
-		} else if (cmd.event == 0x01 || cmd.event == 0x02 || cmd.event == 0x07 || cmd.event == 0x08) {
-			result << sensorValueEvent(1)
-		} else if (cmd.event == 0x00) {
-			result << sensorValueEvent(0)
-		} else if (cmd.event == 0x03) {
-			result << createEvent(name: "tamper", value: "detected", descriptionText: "$device.displayName covering was removed", isStateChange: true)
-			result << response(zwave.batteryV1.batteryGet())
-		} else if (cmd.event == 0x05 || cmd.event == 0x06) {
-			result << createEvent(descriptionText: "$device.displayName detected glass breakage", isStateChange: true)
-		}
+	if (cmd.v1AlarmType == 0x07) {
+    	// Also reports motion, but we don't need double the reports...
+		//result << sensorValueEvent(cmd.v1AlarmLevel, "NotificationReport(7)")
+//	} else if (cmd.notificationType == 0x07) {
+//    	// Not sure what these report...
+//		if (cmd.event == 0x01 || cmd.event == 0x02 || cmd.event == 0x07 || cmd.event == 0x08) {
+//			result << sensorValueEvent(1, "NotificationReport(1)")
+//		} else if (cmd.event == 0x00) {
+//			result << sensorValueEvent(0, "NotificationReport(0)")
+//		} else if (cmd.event == 0x03) {
+//			result << createEvent(name: "tamper", value: "detected", descriptionText: "$device.displayName covering was removed", isStateChange: true)
+//			result << response(zwave.batteryV1.batteryGet())
+//		}
 	} else if (cmd.notificationType) {
 		def text = "Notification $cmd.notificationType: event ${([cmd.event] + cmd.eventParameter).join(", ")}"
 		result << createEvent(name: "notification$cmd.notificationType", value: "$cmd.event", descriptionText: text, isStateChange: true, displayed: false)
-	} else {
-		def value = cmd.v1AlarmLevel == 255 ? "active" : cmd.v1AlarmLevel ?: "inactive"
-		result << createEvent(name: "alarm $cmd.v1AlarmType", value: value, isStateChange: true, displayed: false)
+//	} else {
+//		def value = cmd.v1AlarmLevel == 255 ? "active" : cmd.v1AlarmLevel ?: "inactive"
+//		result << createEvent(name: "alarm $cmd.v1AlarmType", value: value, isStateChange: true, displayed: false)
 	}
+
+//	if (cmd.notificationType == 0x07) {
+//		if (cmd.v1AlarmType == 0x07) {  // special case for nonstandard messages from Monoprice ensors
+//			result << sensorValueEvent(cmd.v1AlarmLevel, "NotificationReport(7)")
+//		} else if (cmd.event == 0x01 || cmd.event == 0x02 || cmd.event == 0x07 || cmd.event == 0x08) {
+//			result << sensorValueEvent(1, "NotificationReport(1)")
+//		} else if (cmd.event == 0x00) {
+//			result << sensorValueEvent(0, "NotificationReport(0)")
+//		} else if (cmd.event == 0x03) {
+//			result << createEvent(name: "tamper", value: "detected", descriptionText: "$device.displayName covering was removed", isStateChange: true)
+//			result << response(zwave.batteryV1.batteryGet())
+//		} else if (cmd.event == 0x05 || cmd.event == 0x06) {
+//			result << createEvent(descriptionText: "$device.displayName detected glass breakage", isStateChange: true)
+//		}
+//	} else if (cmd.notificationType) {
+//		def text = "Notification $cmd.notificationType: event ${([cmd.event] + cmd.eventParameter).join(", ")}"
+//		result << createEvent(name: "notification$cmd.notificationType", value: "$cmd.event", descriptionText: text, isStateChange: true, displayed: false)
+//	} else {
+//		def value = cmd.v1AlarmLevel == 255 ? "active" : cmd.v1AlarmLevel ?: "inactive"
+//		result << createEvent(name: "alarm $cmd.v1AlarmType", value: value, isStateChange: true, displayed: false)
+//	}
 	result
 }
 
 def zwaveEvent(physicalgraph.zwave.commands.wakeupv2.WakeUpNotification cmd)
 {
     log.debug "WakeUpNotification received" 
-	def result = [createEvent(descriptionText: "${device.displayName} woke up", isStateChange: false)]
+	def result = [createEvent(descriptionText: "${device.displayName} woke up", isStateChange: true)]
 
 //	if (state.MSR == "011A-0601-0901" && device.currentState('motion') == null) {  // Enerwave motion doesn't always get the associationSet that the hub sends on join
 //		result << response(zwave.associationV1.associationSet(groupingIdentifier:1, nodeId:zwaveHubNodeId))
 //	}
-
-    if (!isConfigured()) {
-    	// we're still in the process of configuring a newly joined device
-        log.debug("not sending wakeUpNoMoreInformation yet: late configure")
-        result += response(configure())
-//	} else if (!state.lastbat || (new Date().time) - state.lastbat > 53*60*60*1000) {
-//		result << response(zwave.batteryV1.batteryGet())
-	} else {
-		result << response(zwave.wakeUpV2.wakeUpNoMoreInformation())
+	if (!state.lastbat || (new Date().time) - state.lastbat > 53*60*60*1000) {
+		result << response(secure(zwave.batteryV1.batteryGet()))
+		result << response("delay 1200")
 	}
+
+    if (!state.configured) {
+    	// we're still in the process of configuring a newly joined device
+        log.debug("late configure")
+		result << createEvent(descriptionText: "Applying configuration for ${device.displayName}", isStateChange: true)
+        result += response(commitConfigure())
+	}
+//	else {
+//		result += response(secureSequence([
+//			zwave.wakeUpV2.wakeUpIntervalCapabilitiesGet(),
+//			zwave.wakeUpV2.wakeUpIntervalGet(),
+//			zwave.wakeUpV2.wakeUpIntervalSet(seconds:60, nodeid:zwaveHubNodeId)
+//		]))
+//	}
+
+    result << response(secure(zwave.wakeUpV2.wakeUpNoMoreInformation()))
+    result << createEvent(descriptionText: "${device.displayName} going back to sleep.", isStateChange: true)
+    
 	result
 }
 
+def zwaveEvent(physicalgraph.zwave.commands.wakeupv2.WakeUpIntervalCapabilitiesReport cmd)
+{
+	def result = []
+
+	log.debug "defaultWakeUpIntervalSeconds = ${cmd.defaultWakeUpIntervalSeconds}"
+	result << createEvent(descriptionText: "defaultWakeUpIntervalSeconds is ${cmd.defaultWakeUpIntervalSeconds}", isStateChange: true)
+
+	log.debug "maximumWakeUpIntervalSeconds = ${cmd.maximumWakeUpIntervalSeconds}"
+	result << createEvent(descriptionText: "maximumWakeUpIntervalSeconds is ${cmd.maximumWakeUpIntervalSeconds}", isStateChange: true)
+
+	log.debug "minimumWakeUpIntervalSeconds = ${cmd.minimumWakeUpIntervalSeconds}"
+	result << createEvent(descriptionText: "minimumWakeUpIntervalSeconds is ${cmd.minimumWakeUpIntervalSeconds}", isStateChange: true)
+
+	log.debug "wakeUpIntervalStepSeconds = ${cmd.wakeUpIntervalStepSeconds}"
+	result << createEvent(descriptionText: "wakeUpIntervalStepSeconds is ${cmd.wakeUpIntervalStepSeconds}", isStateChange: true)
+
+	result
+}
+
+def zwaveEvent(physicalgraph.zwave.commands.wakeupv2.WakeUpIntervalReport cmd)
+{
+	log.debug "Current wakeup interval = ${cmd.seconds} seconds"
+    createEvent(descriptionText: "Current wakeup interval is ${cmd.seconds}", isStateChange: true)
+}
+
 def zwaveEvent(physicalgraph.zwave.commands.batteryv1.BatteryReport cmd) {
+	log.debug "Current battery level = ${cmd.batteryLevel}"
 	def map = [ name: "battery", unit: "%" ]
 	if (cmd.batteryLevel == 0xFF) {
 		map.value = 1
@@ -204,7 +282,6 @@ def zwaveEvent(physicalgraph.zwave.commands.batteryv1.BatteryReport cmd) {
 		map.value = cmd.batteryLevel
 	}
 	state.lastbat = new Date().time
-	//[createEvent(map), response(zwave.wakeUpV2.wakeUpNoMoreInformation())]
 	createEvent(map)
 }
 
@@ -241,7 +318,7 @@ def zwaveEvent(physicalgraph.zwave.commands.securityv1.SecurityMessageEncapsulat
 		zwaveEvent(encapsulatedCommand)
 	}
 }
-/*
+
 def zwaveEvent(physicalgraph.zwave.commands.crc16encapv1.Crc16Encap cmd)
 {
 	// def encapsulatedCommand = cmd.encapsulatedCommand(commandClassVersions)
@@ -284,7 +361,6 @@ def zwaveEvent(physicalgraph.zwave.commands.manufacturerspecificv2.ManufacturerS
 	result << createEvent(descriptionText: "$device.displayName MSR: $msr", isStateChange: false)
 	result
 }
-*/
 
 /**
  * PING is used by Device-Watch in attempt to reach the Device
@@ -295,14 +371,27 @@ def ping() {
 
 def configure() {
 	log.debug "configure()"
+	state.configured = false
+    null
+}
+
+def commitConfigure() {
+	log.debug "commitConfigure()"
 	def request = []
+    
+	def wakeUpPeriodSeconds = (wakeUpPeriod ?: 60) * 60
+	request << zwave.wakeUpV2.wakeUpIntervalSet(seconds: wakeUpPeriodSeconds, nodeid:zwaveHubNodeId)
+
+	// DO NOT TOUCH!!!  (also needs a delay after setting)
+	// enable/disable notification-style motion events
+	//request << zwave.notificationV3.notificationSet(notificationType: 7, notificationStatus: 0xFF)
 
 	// Set Temperature to °F
 	request << zwave.configurationV1.configurationSet(parameterNumber: 1, size: 1, scaledConfigurationValue: 1)
 
 	// Set Temperature update interval in units of 0.1°F.
-   // def scaledTempUpdateInterval = Math.min(Math.max(((tempUpdateInterval ?: 1) * 10).setScale(0, Math.RoundingMode.HALF_EVEN).intValue(), 1), 50)
-	request << zwave.configurationV1.configurationSet(parameterNumber: 2, size: 1, scaledConfigurationValue: tempUpdateInterval)
+	def scaledTempUpdateInterval = Math.min(Math.max((int)Math.round((tempUpdateInterval?.floatValue() ?: 1) * 10), 1), 50)
+	request << zwave.configurationV1.configurationSet(parameterNumber: 2, size: 1, scaledConfigurationValue: scaledTempUpdateInterval)
 
 	// Set Humidity update interval in units of 1%.
 	request << zwave.configurationV1.configurationSet(parameterNumber: 3, size: 1, scaledConfigurationValue: humidityUpdateInterval ?: 10)
@@ -332,32 +421,22 @@ def configure() {
     }
 	request << zwave.configurationV1.configurationSet(parameterNumber: 7, size: 1, scaledConfigurationValue: ledModeValue)
 
-	// disable notification-style motion events
-	request << zwave.notificationV3.notificationSet(notificationType: 7, notificationStatus: 0)
-
-	request << zwave.batteryV1.batteryGet()
 	request << zwave.sensorBinaryV2.sensorBinaryGet(sensorType: 0x0C) //motion
 	request << zwave.sensorMultilevelV5.sensorMultilevelGet(sensorType: 0x01, scale: 0x1) //temperature
 	request << zwave.sensorMultilevelV5.sensorMultilevelGet(sensorType: 0x03) //illuminance
 	request << zwave.sensorMultilevelV5.sensorMultilevelGet(sensorType: 0x05) //humidity
 
-	setConfigured()
+	state.configured = true
 
-	secureSequence(request) + ["delay 20000", zwave.wakeUpV2.wakeUpNoMoreInformation().format()]
-}
-
-private setConfigured() {
-	device.updateDataValue("configured", "true")
-}
-
-private isConfigured() {
-	device.getDataValue(["configured"]).toString() == "true"
+	def fullRequest = secureSequence(request)
+   	fullRequest << response("delay 2000")
+    fullRequest
 }
 
 private secure(physicalgraph.zwave.Command cmd) {
 	zwave.securityV1.securityMessageEncapsulation().encapsulate(cmd).format()
 }
 
-private secureSequence(commands, delay=200) {
+private secureSequence(commands, delay=1000) {
 	delayBetween(commands.collect{ secure(it) }, delay)
 }
