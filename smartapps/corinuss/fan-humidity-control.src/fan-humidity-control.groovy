@@ -56,7 +56,7 @@ def updated()
 
 def initialize()
 {
-	subscribe(humiditySensor, "relativeHumidityMeasurement", humidityChangeHandler)
+	subscribe(humiditySensor, "humidity", humidityChangeHandler)
 	subscribe(fanSwitch, "switch", switchChangeHandler)
     
     state.fanShouldRun = false
