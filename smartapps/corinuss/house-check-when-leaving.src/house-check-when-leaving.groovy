@@ -71,7 +71,7 @@ def presenceChangeHandler(evt)
 def checkHouse(data)
 {
 	def needNotify = false;
-    def message = "${data.user} left these doors open:"
+    def message = "These doors are open:"
     
 	for (garageDoor in garageDoors)
     {
