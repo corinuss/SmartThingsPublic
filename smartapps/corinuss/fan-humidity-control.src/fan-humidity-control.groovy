@@ -33,9 +33,15 @@ preferences
     }
     section("Triggers:")
     {
-        input "highHumidity", "number", title: "Start fan at this humidity %", required: true
-        input "lowHumidity", "number", title: "Run fan until this humidity % is reached", required: true
-        input "minRunTime", "number", title: "Minutes to run fan after target humidity is reached", required: true
+        input "highHumidity", "number", title: "Start fan at this humidity %"
+        input "lowHumidity", "number", title: "Run fan until this humidity % is reached"
+        input "minRunTime", "number", title: "Minutes to run fan after target humidity is reached"
+        input "runFanAfterTarget", "bool", title: "Should the fan run after target humidity is reached?"
+    }
+    section("Activate relative to another sensor:"){
+        input "referenceSensor", "capability.relativeHumidityMeasurement", title: "Humidity Sensor to compare against"
+        input "highHumidityDelta", "number", title: "Start fan when our humidity is this much higher than our reference"
+        input "lowHumidityDelta", "number", title: "Run fan until our humidity has dropped to this much higher than our reference"
     }
 }
 
@@ -57,94 +63,198 @@ def updated()
 def initialize()
 {
 	subscribe(humiditySensor, "humidity", humidityChangeHandler)
-	subscribe(fanSwitch, "switch", switchChangeHandler)
+	subscribe(fanSwitch, "switch.off", switchChangeHandler)
+    
+    if (fanSwitch.hasCapability("Button"))
+    {
+    	log.debug "Double-tap switch detected."
+		subscribe(fanSwitch, "button.pushed", switchDoubleTapHandler)
+    }
     
     state.fanShouldRun = false
     state.ownsSwitch = false
-    // TODO Force a humidity check here?
+    state.fanTimerRunning = false
+    
+    checkHumidity()
 }
 
 def humidityChangeHandler(evt)
 {
-    log.debug "Humidity $evt.name: $evt.value"
-    
-	if (evt.value < settings.lowHumidity)
+    log.debug "[Humidity] $evt.name: $evt.value"
+    checkHumidity()
+}
+
+def checkHumidity()
+{
+    def currentHumidity = humiditySensor.latestValue("humidity")
+    log.debug "currentHumidity $currentHumidity"
+
+	if (isLowHumidity(currentHumidity))
     {
     	if (state.fanShouldRun)
         {
-        	if (settings.minRunTime > 0)
+        	if (settings.minRunTime != null && settings.minRunTime > 0)
             {
             	// If a timer isn't already running, set a callback so we can stop the fan after minRunTime has expired.
-            	if (!state.containsKey('fanTimerStart'))
+            	if (!state.fanTimerRunning && settings.runFanAfterTarget)
                 {
-                    state.fanTimerStart = now()
-					runIn(60*settings.minRunTime, fanTimerExpiration)
+                	sendNotificationEvent("Running fan '${fanSwitch.getDisplayName()}' for $settings.minRunTime minutes after low humidity ${currentHumidity}% reached.")
+	                fanTimerStart()
                 }
             }
             else
             {
             	// We don't have a minimum run time.  Turn the fan off now.
+				sendNotificationEvent("Turning off fan '${fanSwitch.getDisplayName()}' after low humidity ${currentHumidity}% reached.")
             	state.fanShouldRun = false
                 switchTurnOff()
+            }
+        }
+        else
+        {
+	        if (state.containsKey('switchOnStart'))
+            {
+            	// FIXME - This shouldn't be required.  Likely a flaw in my logic somewhere.
+                state.remove('switchOnStart')
+                state.ownsSwitch = false
+                sendNotificationEvent("DEBUG: Cleaning up 'switchOnStart' for fan '${fanSwitch.getDisplayName()}', since we don't own this anymore.")
             }
         }
     }
     else
     {
     	// Humidity didn't stay below its minimum threshold, so disable the timer to prevent the fan from turning off.
-    	state.remove('fanTimerStart')
+        if (state.fanTimerRunning)
+        {
+			sendNotificationEvent("Clearing fan '${fanSwitch.getDisplayName()}' timer after humidity ${currentHumidity}% raising back above minimum.")
+	    	state.fanTimerRunning = false
+        }
         
-	    if (evt.value >= settings.highHumidity)
+	    if (isHighHumidity(currentHumidity))
     	{
-    		state.fanShouldRun = true
-            switchTurnOn()
+        	if (!state.fanShouldRun)
+            {
+	    		state.fanShouldRun = true
+				sendNotificationEvent("Enabling fan '${fanSwitch.getDisplayName()}' due to high humidity ${currentHumidity}% on sensor '${humiditySensor.getDisplayName()}'")
+			}
+            
+   	        switchTurnOn()
     	}
     }
 }
 
-def fanTimerExpiration()
+def isHighHumidity(humidityLevel)
 {
-    log.debug "fan timer expired"
-
-	if (state.containsKey('fanTimerStart'))
+	if (settings.highHumidity != null && humidityLevel >= settings.highHumidity)
     {
-    	def millisecondsSinceFanStart = now() - state.fanTimerStart
-        if (millisecondsSinceFanStart > 60000*settings.minRunTime)
+	    log.debug "[isHighHumidity] Passed due to currentHumidity ($currentHumidity) >= settings.highHumidity ($settings.highHumidity)"
+    	return true
+    }
+    
+    if (settings.referenceSensor != null && settings.highHumidityDelta != null)
+    {
+    	def referenceHumidity = referenceSensor.latestValue("humidity")
+        
+        if (humidityLevel >= referenceHumidity + settings.highHumidityDelta)
         {
-        	state.remove('fanTimerStart')
-        	state.fanShouldRun = false
-            switchTurnOff()
+		    log.debug "[isHighHumidity] Passed due to currentHumidity ($currentHumidity) >= referenceHumidity ($referenceHumidity) + settings.highHumidityDelta ($settings.highHumidityDelta)"
+        	return true;
         }
+    }
+    
+    log.debug "[isHighHumidity] Failed"
+    return false
+}
+
+def isLowHumidity(humidityLevel)
+{
+	if (settings.lowHumidity != null && currentHumidity >= settings.lowHumidity)
+    {
+	    log.debug "[isLowHumidity] Failed due to currentHumidity ($currentHumidity) >= settings.lowHumidity ($settings.lowHumidity)"
+    	return false
+    }
+    
+    if (settings.referenceSensor != null && settings.lowHumidityDelta != null)
+    {
+    	def referenceHumidity = referenceSensor.latestValue("humidity")
+        
+        if (humidityLevel >= referenceHumidity + settings.lowHumidityDelta)
+        {
+		    log.debug "[isLowHumidity] Failed due to currentHumidity ($currentHumidity) >= referenceHumidity ($referenceHumidity) + settings.lowHumidityDelta ($settings.lowHumidityDelta)"
+        	return false;
+        }
+    }
+    
+    log.debug "[isLowHumidity] Passed"
+    return true;
+}
+
+def fanTimerStart()
+{
+    state.fanTimerRunning = true
+    runIn(60*settings.minRunTime, fanTimerExpiration, [overwrite: true])
+}
+
+def fanTimerExpiration(data)
+{
+    log.debug "[fan timer expired]"
+   	log.debug "state.fanTimerRunning $state.fanTimerRunning"
+
+	if (state.fanTimerRunning)
+    {
+		sendNotificationEvent("Turning off fan '${fanSwitch.getDisplayName()}' after running $settings.minRunTime minutes.")
+    
+        state.fanTimerRunning = false
+        state.fanShouldRun = false
+        switchTurnOff()
     }
 }
 
 def switchChangeHandler(evt)
 {
-    log.debug "Switch $evt.name: $evt.value"
+    log.debug "[Switch] $evt.name: $evt.value"
     
     if (state.fanShouldRun && evt.value == "off")
     {
-    	if (state.containsKey('switchOnStart') && 
-        	(now() - state.switchOnStart < 60000))
+        if (state.containsKey('switchOnStart') && 
+            (now() - state.switchOnStart < 60000))
         {
-        	// User has turned off the switch within a minute of us turning it back on.
+            // User has turned off the switch within a minute of us turning it back on.
             // They're forcing it off, so let them.
-        	state.remove('switchOnStart')
+            state.remove('switchOnStart')
             state.ownsSwitch = false
+            sendNotificationEvent("Disabling fan '${fanSwitch.getDisplayName()}' due to user override.")
         }
         else
         {
             // Turn the fan switch back on.
-        	switchTurnOn()
+            switchTurnOn()
+            sendNotificationEvent("Re-enabling fan '${fanSwitch.getDisplayName()}' after user attempted to turn off.")
         }
+    }
+}
+
+def switchDoubleTapHandler(evt)
+{
+    log.debug "[DoubleTap] $evt.name: $evt.value ${evt.jsonData?.buttonNumber}"
+    
+    if (evt.jsonData?.buttonNumber == 1 && $settings.minRunTime != null)
+    {
+    	sendNotificationEvent("Running fan '${fanSwitch.getDisplayName()}' for $settings.minRunTime minutes after double-tap received.")
+        state.fanShouldRun = true
+        switchTurnOn()
+    	fanTimerStart()
     }
 }
 
 def switchTurnOn()
 {
-    log.debug "switchTurnOn"
+    log.debug "[switchTurnOn]"
 
-	if (fanSwitch.switchState == 'off')
+    def switchState = fanSwitch.latestValue("switch")
+    log.debug "switchState $switchState"
+
+	if (switchState == 'off')
     {
     	state.switchOnStart = now()
         state.ownsSwitch = true
@@ -154,13 +264,19 @@ def switchTurnOn()
 
 def switchTurnOff()
 {
-    log.debug "switchTurnOff"
+    log.debug "[switchTurnOff]"
+
+    def switchState = fanSwitch.latestValue("switch")
+    log.debug "switchState $switchState"
+    log.debug "state.ownsSwitch $state.ownsSwitch"
 
 	// Only turn off the switch if we actually own it
-	if (state.ownsSwitch && fanSwitch.switchState == 'on')
+	if (state.ownsSwitch && switchState == 'on')
     {
     	state.remove('switchOnStart')
         state.ownsSwitch = false
+        
+        log.debug "fanSwitch.off"
         fanSwitch.off()
     }
 }
