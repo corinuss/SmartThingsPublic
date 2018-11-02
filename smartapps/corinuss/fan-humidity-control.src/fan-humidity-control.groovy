@@ -238,7 +238,7 @@ def switchDoubleTapHandler(evt)
 {
     log.debug "[DoubleTap] $evt.name: $evt.value ${evt.jsonData?.buttonNumber}"
     
-    if (evt.jsonData?.buttonNumber == 1 && $settings.minRunTime != null)
+    if (evt.jsonData?.buttonNumber == 1 && settings.minRunTime != null)
     {
     	sendNotificationEvent("Running fan '${fanSwitch.getDisplayName()}' for $settings.minRunTime minutes after double-tap received.")
         state.fanShouldRun = true
